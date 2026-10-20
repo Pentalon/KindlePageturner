@@ -1,0 +1,14 @@
+# Arduino / Build
+build/
+*.bin
+*.elf
+*.map
+.vscode/
+# Windows / macOS
+Thumbs.db
+desktop.ini
+.DS_Store
+# SolidWorks Lock-/Temp-Dateien
+~$*
+*.SLDPRT.bak
+*.SLDASM.bak
