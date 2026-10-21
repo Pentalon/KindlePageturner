@@ -1,32 +1,56 @@
-// KindlePageturner v0.1.0
-// Seeed XIAO ESP32-S3 – BLE HID page turner, Kindle-Click-kompatibel (Kindle FW >= 5.20.1)
-// Arduino Core esp32:esp32 3.3.x, Board "XIAO_ESP32S3"
-// Library: NimBLE-Arduino 2.5.0 (h2zero)
+// KindlePageturner v0.1.4
+// BLE HID page turner, Kindle-Click-kompatibel (Kindle FW >= 5.20.1)
+// Arduino Core esp32:esp32 3.3.x, Library NimBLE-Arduino 2.5.0 (h2zero)
 //
-// v0.1: BLE HID, Tasten, Sleep-Geste, Akkuanzeige, Wake-Puffer. Noch KEIN Deep Sleep (Test an USB).
+// Board-Auswahl unten per #define:
+//   BOARD_DEVKIT : ESP32-S3-N16R8 DevKit, Breadboard, Versorgung USB  -> IDE-Board "ESP32S3 Dev Module"
+//   BOARD_XIAO   : Seeed XIAO ESP32-S3, LiPo + Spannungsteiler an D10  -> IDE-Board "XIAO_ESP32S3"
+//
+// v0.1.1: Board-Umschaltung, DevKit ohne Akkumessung (meldet 100 %), RGB-LED am DevKit,
+//         startServices() entfernt (in NimBLE 2.x deprecated, Server startet Services selbst).
+// v0.1.2: struct Button / enum LedState vor die erste Funktion verschoben (Arduino-Prototypen).
+// v0.1.3: setup() wartet bis 3 s auf den USB-CDC-Port, damit die Startmeldung sichtbar ist.
+// v0.1.4: Sleep-Geste ändert die Helligkeit nicht mehr (Helligkeit erst nach 150-ms-Fenster).
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
+#define BOARD_DEVKIT
+// #define BOARD_XIAO
+
 // ---------------- Pins ----------------
-#define PIN_FWD     1    // D0  obere Taste   -> Seite vor   (KEY_PAGEDOWN)
-#define PIN_BACK    2    // D1  untere Taste  -> Seite zurück (KEY_PAGEUP)
-#define PIN_BR_UP   5    // D4  Seite oben    -> Helligkeit +
-#define PIN_BR_DN   6    // D5  Seite unten   -> Helligkeit -
-#define PIN_BAT     9    // D10 Akkuspannung über 2x 220k Teiler
-#define PIN_LED     21   // User-LED, active low
+#if defined(BOARD_DEVKIT)
+  #define PIN_FWD     1    // GPIO1  Seite vor    (KEY_PAGEDOWN)
+  #define PIN_BACK    2    // GPIO2  Seite zurück (KEY_PAGEUP)
+  #define PIN_BR_UP   5    // GPIO5  Helligkeit +
+  #define PIN_BR_DN   6    // GPIO6  Helligkeit -
+  #define PIN_RGB     48   // onboard WS2812 (manche DevKitC v1.0: GPIO38)
+  #define HAS_BATTERY 0
+#elif defined(BOARD_XIAO)
+  #define PIN_FWD     1    // D0
+  #define PIN_BACK    2    // D1
+  #define PIN_BR_UP   5    // D4
+  #define PIN_BR_DN   6    // D5
+  #define PIN_BAT     9    // D10, Teiler 2x 220k
+  #define PIN_LED     21   // User-LED, active low
+  #define HAS_BATTERY 1
+#else
+  #error "BOARD_DEVKIT oder BOARD_XIAO definieren"
+#endif
 
 // ---------------- Timing ----------------
 #define DEBOUNCE_MS        20
-#define SLEEP_CHORD_MS     1000   // beide Seitentasten halten -> KEY_POWER
+#define SLEEP_CHORD_MS     1000   // beide Helligkeitstasten halten -> KEY_POWER
+#define CHORD_WINDOW_MS    150    // Zeitfenster, in dem die zweite Seitentaste als Geste zählt
 #define READY_DELAY_MS     2500   // nach Connect warten, bis Kindle HID geöffnet hat
 #define BAT_INTERVAL_MS    60000  // Akkustand regelmäßig neu senden
 #define ADV_INTERVAL_UNITS 32     // 32 * 0.625 ms = 20 ms
 
-#define FW_VERSION "0.1.0"
+#define FW_VERSION  "0.1.4"
+#define DEVICE_NAME "Kindle Pageturner"
 
-// ---------------- Report Bits ----------------
+// ---------------- Report ----------------
 // Eine Application Collection, Report ID 1, 1 Byte:
 // Bit0 PageDown, Bit1 PageUp, Bit2 BrightUp, Bit3 BrightDown, Bit4 Power
 #define BIT_FWD     0x01
@@ -59,6 +83,35 @@ static const uint8_t reportMap[] = {
   0xC0               // End Collection
 };
 
+// ---------------- Typen ----------------
+// Müssen vor der ersten Funktion stehen: die Arduino-IDE fügt dort automatisch
+// Funktionsprototypen ein, die diese Typen bereits verwenden.
+struct Button {
+  uint8_t  pin;
+  bool     state;    // entprellt, true = gedrückt
+  bool     raw;
+  uint32_t changedAt;
+};
+
+enum LedState { LED_OFF, LED_ADV, LED_CONN, LED_KEY };
+
+enum SideState { SIDE_IDLE, SIDE_PENDING, SIDE_ACTIVE, SIDE_CHORD };
+
+// ---------------- LED ----------------
+
+static void ledSet(LedState s) {
+#if defined(BOARD_DEVKIT)
+  switch (s) {
+    case LED_OFF:  rgbLedWrite(PIN_RGB, 0, 0, 0);   break;
+    case LED_ADV:  rgbLedWrite(PIN_RGB, 0, 0, 40);  break;   // blau
+    case LED_CONN: rgbLedWrite(PIN_RGB, 0, 8, 0);   break;   // grün gedimmt
+    case LED_KEY:  rgbLedWrite(PIN_RGB, 0, 60, 0);  break;   // grün hell
+  }
+#else
+  digitalWrite(PIN_LED, (s == LED_ADV || s == LED_KEY) ? LOW : HIGH);
+#endif
+}
+
 // ---------------- BLE ----------------
 static NimBLEServer*         server   = nullptr;
 static NimBLEHIDDevice*      hid      = nullptr;
@@ -75,7 +128,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
     connected = false;
-    Serial.printf("Disconnected, reason %d\n", reason);
+    Serial.printf("Disconnected, reason 0x%X\n", reason);
     NimBLEDevice::startAdvertising();
   }
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
@@ -84,19 +137,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 // ---------------- Tasten ----------------
-struct Button {
-  uint8_t  pin;
-  bool     state;    // entprellt, true = gedrückt
-  bool     raw;
-  uint32_t changedAt;
-};
-
 static Button bFwd  = {PIN_FWD,   false, false, 0};
 static Button bBack = {PIN_BACK,  false, false, 0};
 static Button bUp   = {PIN_BR_UP, false, false, 0};
 static Button bDn   = {PIN_BR_DN, false, false, 0};
 
-// liefert true bei neuem Druck (Flanke)
+// true bei neuem Druck (Flanke)
 static bool updateButton(Button& b, uint32_t now) {
   bool r = (digitalRead(b.pin) == LOW);
   if (r != b.raw) { b.raw = r; b.changedAt = now; }
@@ -109,12 +155,16 @@ static bool updateButton(Button& b, uint32_t now) {
 
 // ---------------- Akku ----------------
 static uint8_t readBatteryPercent() {
+#if HAS_BATTERY
   uint32_t mv = 0;
   for (int i = 0; i < 16; i++) mv += analogReadMilliVolts(PIN_BAT);
   mv = (mv / 16) * 2;                       // Teiler 1:2
   if (mv >= 4150) return 100;
   if (mv <= 3300) return 0;
   return (uint8_t)((mv - 3300) * 100 / (4150 - 3300));
+#else
+  return 100;                               // USB-Versorgung
+#endif
 }
 
 // ---------------- Senden ----------------
@@ -124,6 +174,7 @@ static void sendReport(uint8_t bits) {
   inReport->setValue(&bits, 1);
   inReport->notify();
   lastSent = bits;
+  Serial.printf("Report 0x%02X\n", bits);
 }
 
 static void tap(uint8_t bit) {
@@ -135,17 +186,22 @@ static void tap(uint8_t bit) {
 // ---------------- Setup ----------------
 void setup() {
   Serial.begin(115200);
+  // Native USB: nach Reset meldet sich der COM-Port neu an, frühe Ausgaben gingen sonst verloren.
+  for (uint32_t t = millis(); !Serial && (millis() - t) < 3000; ) delay(10);
+  delay(200);
 
   pinMode(PIN_FWD,   INPUT_PULLUP);
   pinMode(PIN_BACK,  INPUT_PULLUP);
   pinMode(PIN_BR_UP, INPUT_PULLUP);
   pinMode(PIN_BR_DN, INPUT_PULLUP);
-  pinMode(PIN_LED,   OUTPUT);
-  digitalWrite(PIN_LED, HIGH);              // aus
+#if !defined(BOARD_DEVKIT)
+  pinMode(PIN_LED, OUTPUT);
+#endif
+  ledSet(LED_OFF);
 
-  NimBLEDevice::init("Kindle Pageturner");
+  NimBLEDevice::init(DEVICE_NAME);
   // Just Works, Bonding, Secure Connections, kein MITM.
-  // Keine eigene Security Request senden – der Kindle startet das Pairing selbst.
+  // Keine eigene Security Request – der Kindle startet das Pairing selbst.
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
@@ -154,28 +210,27 @@ void setup() {
 
   hid = new NimBLEHIDDevice(server);
   hid->setManufacturer("DIY");
-  hid->setPnp(0x01, 0x0171, 0x0443, 0x0100);   // BT SIG, VID 0x0171, PID 0x0443, Version 1.00
+  hid->setPnp(0x01, 0x0171, 0x0443, 0x0100);   // -> 01 71 01 43 04 00 01
   hid->setHidInfo(0x00, 0x02);                  // Country 0, normally connectable
   hid->setReportMap((uint8_t*)reportMap, sizeof(reportMap));
   inReport = hid->getInputReport(1);
 
-  // Firmware Revision 0x2A26 – wird am Kindle unter Zubehör angezeigt
+  // Firmware Revision 0x2A26 – Anzeige unter Einstellungen > Zubehör
   NimBLECharacteristic* fwRev = hid->getDeviceInfoService()->createCharacteristic(
-      (uint16_t)0x2A26, NIMBLE_PROPERTY::READ);
+      NimBLEUUID((uint16_t)0x2A26), NIMBLE_PROPERTY::READ);
   fwRev->setValue(FW_VERSION);
 
   hid->setBatteryLevel(readBatteryPercent());
-  hid->startServices();
 
   // Advertising: Flags + Manufacturer Data 71 01 04 43 im ADV_IND, Name in Scan Response
   NimBLEAdvertisementData advData;
   advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
   const uint8_t mfg[] = {0x71, 0x01, 0x04, 0x43};   // VID LE, PID BE
-  advData.setManufacturerData(std::string((const char*)mfg, sizeof(mfg)));
+  advData.setManufacturerData(mfg, sizeof(mfg));
   advData.addServiceUUID(NimBLEUUID((uint16_t)0x1812));
 
   NimBLEAdvertisementData scanData;
-  scanData.setName("Kindle Pageturner");
+  scanData.setName(DEVICE_NAME);
 
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->setAdvertisementData(advData);
@@ -183,19 +238,21 @@ void setup() {
   adv->enableScanResponse(true);
   adv->setMinInterval(ADV_INTERVAL_UNITS);
   adv->setMaxInterval(ADV_INTERVAL_UNITS);
-  adv->start();
+  adv->start();                                  // startet auch den GATT-Server
 
-  Serial.println("KindlePageturner " FW_VERSION " advertising");
+  Serial.printf("KindlePageturner %s advertising, MAC %s\n",
+                FW_VERSION, NimBLEDevice::getAddress().toString().c_str());
 }
 
 // ---------------- Loop ----------------
-static uint8_t  pending      = 0;      // gepufferter Seitenwechsel bis Kindle bereit
-static bool     wasReady     = false;
-static bool     chordLock    = false;
-static bool     chordFired   = false;
-static uint32_t chordStart   = 0;
-static uint32_t lastBatSent  = 0;
-static uint32_t lastBlink    = 0;
+static uint8_t  pending     = 0;      // gepufferter Seitenwechsel bis Kindle bereit
+static bool     wasReady    = false;
+static SideState side       = SIDE_IDLE;
+static uint8_t   sideFirst  = 0;
+static uint32_t  sideStart  = 0;
+static bool      chordFired = false;
+static uint32_t lastBatSent = 0;
+static uint32_t lastBlink   = 0;
 
 void loop() {
   uint32_t now = millis();
@@ -207,15 +264,15 @@ void loop() {
 
   bool ready = connected && (now - connectedAt) >= READY_DELAY_MS;
 
-  // --- LED: blinkt beim Advertising, aus wenn verbunden ---
-  if (!connected) {
+  // --- LED ---
+  if (!connected) {                                   // blinkt beim Advertising
     if (now - lastBlink >= 1000) lastBlink = now;
-    digitalWrite(PIN_LED, (now - lastBlink) < 80 ? LOW : HIGH);
+    ledSet((now - lastBlink) < 80 ? LED_ADV : LED_OFF);
   } else {
-    digitalWrite(PIN_LED, HIGH);
+    ledSet(lastSent ? LED_KEY : LED_CONN);
   }
 
-  // --- Nicht bereit: letzten Seitenwechsel puffern ---
+  // --- nicht bereit: letzten Seitenwechsel puffern ---
   if (!ready) {
     if (fwdPressed)  pending = BIT_FWD;
     if (backPressed) pending = BIT_BACK;
@@ -227,6 +284,7 @@ void loop() {
   // --- gerade bereit geworden ---
   if (!wasReady) {
     wasReady = true;
+    Serial.println("Ready");
     lastSent = 0;
     sendReport(0);
     hid->setBatteryLevel(readBatteryPercent(), true);
@@ -234,30 +292,60 @@ void loop() {
     if (pending) { tap(pending); pending = 0; }
   }
 
-  // --- Sleep-Geste: beide Seitentasten 1 s ---
-  if (bUp.state && bDn.state) {
-    if (!chordLock) { chordLock = true; chordFired = false; chordStart = now; }
-    if (!chordFired && (now - chordStart) >= SLEEP_CHORD_MS) {
-      chordFired = true;
-      sendReport(lastSent & ~(BIT_BR_UP | BIT_BR_DN));  // Helligkeit sicher loslassen
-      tap(BIT_POWER);
-      Serial.println("KEY_POWER");
-    }
-  } else if (!bUp.state && !bDn.state) {
-    chordLock = false;
+  // --- Seitentasten: Helligkeit oder Sleep-Geste ---
+  // Eine Helligkeitstaste wird erst nach CHORD_WINDOW_MS an den Kindle gemeldet.
+  // Kommt in dieser Zeit die zweite Seitentaste dazu, ist es die Sleep-Geste
+  // und es wird keine Helligkeit gesendet.
+  bool upHeld = bUp.state, dnHeld = bDn.state;
+  uint8_t brBits = 0;
+
+  switch (side) {
+    case SIDE_IDLE:
+      if (upHeld || dnHeld) {
+        side = SIDE_PENDING; sideStart = now;
+        sideFirst = upHeld ? BIT_BR_UP : BIT_BR_DN;
+      }
+      break;
+
+    case SIDE_PENDING:
+      if (upHeld && dnHeld) {
+        side = SIDE_CHORD; sideStart = now; chordFired = false;
+      } else if (!upHeld && !dnHeld) {
+        tap(sideFirst);                       // kurzer Tipp innerhalb des Fensters
+        side = SIDE_IDLE;
+      } else if ((now - sideStart) >= CHORD_WINDOW_MS) {
+        side = SIDE_ACTIVE;
+      }
+      break;
+
+    case SIDE_ACTIVE:
+      if (upHeld && dnHeld) {                 // zweite Taste spät dazu -> Geste
+        side = SIDE_CHORD; sideStart = now; chordFired = false;
+      } else if (!upHeld && !dnHeld) {
+        side = SIDE_IDLE;
+      } else {
+        if (upHeld) brBits |= BIT_BR_UP;
+        if (dnHeld) brBits |= BIT_BR_DN;
+      }
+      break;
+
+    case SIDE_CHORD:
+      if (upHeld && dnHeld && !chordFired && (now - sideStart) >= SLEEP_CHORD_MS) {
+        chordFired = true;
+        tap(BIT_POWER);
+        Serial.println("KEY_POWER");
+      }
+      if (!upHeld && !dnHeld) side = SIDE_IDLE;   // erst nach Loslassen beider Tasten
+      break;
   }
 
   // --- Report zusammenbauen ---
-  uint8_t bits = 0;
+  uint8_t bits = brBits;
   if (bFwd.state)  bits |= BIT_FWD;
   if (bBack.state) bits |= BIT_BACK;
-  if (!chordLock) {                       // während der Geste keine Helligkeit
-    if (bUp.state) bits |= BIT_BR_UP;
-    if (bDn.state) bits |= BIT_BR_DN;
-  }
   if (bits != lastSent) sendReport(bits);
 
-  // --- Akkustand periodisch ---
+  // --- Akkustand periodisch (Kindle nutzt nur Notifications) ---
   if (now - lastBatSent >= BAT_INTERVAL_MS) {
     hid->setBatteryLevel(readBatteryPercent(), true);
     lastBatSent = now;
