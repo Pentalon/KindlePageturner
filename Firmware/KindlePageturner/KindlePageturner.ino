@@ -1,23 +1,31 @@
-// KindlePageturner v0.1.4
+// KindlePageturner v0.2.0
 // BLE HID page turner, Kindle-Click-kompatibel (Kindle FW >= 5.20.1)
-// Arduino Core esp32:esp32 3.3.x, Library NimBLE-Arduino 2.5.0 (h2zero)
+// Arduino Core esp32:esp32 3.3.x, Library NimBLE-Arduino 2.5.x (h2zero)
 //
 // Board-Auswahl unten per #define:
 //   BOARD_DEVKIT : ESP32-S3-N16R8 DevKit, Breadboard, Versorgung USB  -> IDE-Board "ESP32S3 Dev Module"
-//   BOARD_XIAO   : Seeed XIAO ESP32-S3, LiPo + Spannungsteiler an D10  -> IDE-Board "XIAO_ESP32S3"
+//   BOARD_XIAO   : Seeed XIAO ESP32-S3, LiPo + Spannungsteiler an D9   -> IDE-Board "XIAO_ESP32S3"
 //
 // v0.1.1: Board-Umschaltung, DevKit ohne Akkumessung (meldet 100 %), RGB-LED am DevKit,
 //         startServices() entfernt (in NimBLE 2.x deprecated, Server startet Services selbst).
 // v0.1.2: struct Button / enum LedState vor die erste Funktion verschoben (Arduino-Prototypen).
 // v0.1.3: setup() wartet bis 3 s auf den USB-CDC-Port, damit die Startmeldung sichtbar ist.
 // v0.1.4: Sleep-Geste ändert die Helligkeit nicht mehr (Helligkeit erst nach 150-ms-Fenster).
+// v0.1.5: XIAO aktiv, Akku an D9/GPIO8, Kalibrierfaktor BAT_DIVIDER, Akku-Ausgabe im Serial Monitor.
+// v0.2.0: Deep Sleep mit EXT1-Wake auf allen 4 Tasten:
+//         - 60 s ohne Kindle-Verbindung, 5 min ohne Tastendruck, oder nach der Sleep-Geste
+//         - Wecktaste Seite vor/zurück wird nach dem Reconnect nachgeliefert
+//         - gehaltene Taste nach dem Puffern unterdrückt (kein doppeltes Blättern)
+//         - CPU 80 MHz, USB-Wartezeit nur nach Power-on
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
 
-#define BOARD_DEVKIT
-// #define BOARD_XIAO
+// #define BOARD_DEVKIT
+#define BOARD_XIAO
 
 // ---------------- Pins ----------------
 #if defined(BOARD_DEVKIT)
@@ -32,7 +40,7 @@
   #define PIN_BACK    2    // D1
   #define PIN_BR_UP   5    // D4
   #define PIN_BR_DN   6    // D5
-  #define PIN_BAT     9    // D10, Teiler 2x 220k
+  #define PIN_BAT     8    // D9 (GPIO8), Teiler 2x 220k
   #define PIN_LED     21   // User-LED, active low
   #define HAS_BATTERY 1
 #else
@@ -41,13 +49,18 @@
 
 // ---------------- Timing ----------------
 #define DEBOUNCE_MS        20
-#define SLEEP_CHORD_MS     1000   // beide Helligkeitstasten halten -> KEY_POWER
-#define CHORD_WINDOW_MS    150    // Zeitfenster, in dem die zweite Seitentaste als Geste zählt
-#define READY_DELAY_MS     2500   // nach Connect warten, bis Kindle HID geöffnet hat
-#define BAT_INTERVAL_MS    60000  // Akkustand regelmäßig neu senden
-#define ADV_INTERVAL_UNITS 32     // 32 * 0.625 ms = 20 ms
+#define SLEEP_CHORD_MS     1000     // beide Helligkeitstasten halten -> KEY_POWER
+#define CHORD_WINDOW_MS    150      // Zeitfenster, in dem die zweite Seitentaste als Geste zählt
+#define READY_DELAY_MS     2500     // nach Connect warten, bis Kindle HID geöffnet hat
+#define BAT_INTERVAL_MS    60000    // Akkustand regelmäßig neu senden
+#define ADV_INTERVAL_UNITS 32       // 32 * 0.625 ms = 20 ms
 
-#define FW_VERSION  "0.1.4"
+#define ADV_TIMEOUT_MS     60000UL  // so lange ohne Verbindung werben, dann Deep Sleep
+#define IDLE_TIMEOUT_MS    300000UL // verbunden, aber so lange keine Taste -> trennen + Deep Sleep
+#define AFTER_POWER_MS     1000UL   // nach Sleep-Geste und Loslassen -> Deep Sleep
+
+#define FW_VERSION  "0.2.0"
+#define BAT_DIVIDER 2.00f   // Teilerfaktor, bei Abweichung zum Multimeter anpassen
 #define DEVICE_NAME "Kindle Pageturner"
 
 // ---------------- Report ----------------
@@ -83,6 +96,8 @@ static const uint8_t reportMap[] = {
   0xC0               // End Collection
 };
 
+static const uint8_t wakePins[] = {PIN_FWD, PIN_BACK, PIN_BR_UP, PIN_BR_DN};
+
 // ---------------- Typen ----------------
 // Müssen vor der ersten Funktion stehen: die Arduino-IDE fügt dort automatisch
 // Funktionsprototypen ein, die diese Typen bereits verwenden.
@@ -98,7 +113,6 @@ enum LedState { LED_OFF, LED_ADV, LED_CONN, LED_KEY };
 enum SideState { SIDE_IDLE, SIDE_PENDING, SIDE_ACTIVE, SIDE_CHORD };
 
 // ---------------- LED ----------------
-
 static void ledSet(LedState s) {
 #if defined(BOARD_DEVKIT)
   switch (s) {
@@ -119,17 +133,24 @@ static NimBLECharacteristic* inReport = nullptr;
 
 static volatile bool     connected   = false;
 static volatile uint32_t connectedAt = 0;
+static volatile uint16_t connHandle  = 0;
+static volatile uint32_t advStart    = 0;      // Beginn der aktuellen Werbephase
+static volatile bool     goingToSleep = false;
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
     connected   = true;
     connectedAt = millis();
+    connHandle  = info.getConnHandle();
     Serial.printf("Connected: %s\n", info.getAddress().toString().c_str());
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
     connected = false;
     Serial.printf("Disconnected, reason 0x%X\n", reason);
-    NimBLEDevice::startAdvertising();
+    if (!goingToSleep) {
+      advStart = millis();
+      NimBLEDevice::startAdvertising();
+    }
   }
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
     Serial.printf("Auth: encrypted=%d bonded=%d\n", info.isEncrypted(), info.isBonded());
@@ -142,26 +163,37 @@ static Button bBack = {PIN_BACK,  false, false, 0};
 static Button bUp   = {PIN_BR_UP, false, false, 0};
 static Button bDn   = {PIN_BR_DN, false, false, 0};
 
+static uint32_t lastActivity = 0;   // letzte Tastenänderung
+
 // true bei neuem Druck (Flanke)
 static bool updateButton(Button& b, uint32_t now) {
   bool r = (digitalRead(b.pin) == LOW);
   if (r != b.raw) { b.raw = r; b.changedAt = now; }
   if ((now - b.changedAt) >= DEBOUNCE_MS && b.state != b.raw) {
     b.state = b.raw;
+    lastActivity = now;
     return b.state;
   }
+  return false;
+}
+
+static bool anyButtonHeld() {
+  for (uint8_t p : wakePins) if (digitalRead(p) == LOW) return true;
   return false;
 }
 
 // ---------------- Akku ----------------
 static uint8_t readBatteryPercent() {
 #if HAS_BATTERY
-  uint32_t mv = 0;
-  for (int i = 0; i < 16; i++) mv += analogReadMilliVolts(PIN_BAT);
-  mv = (mv / 16) * 2;                       // Teiler 1:2
-  if (mv >= 4150) return 100;
-  if (mv <= 3300) return 0;
-  return (uint8_t)((mv - 3300) * 100 / (4150 - 3300));
+  uint32_t adc = 0;
+  for (int i = 0; i < 16; i++) adc += analogReadMilliVolts(PIN_BAT);
+  uint32_t mv = (uint32_t)((adc / 16) * BAT_DIVIDER);
+  uint8_t pct;
+  if (mv >= 4150)      pct = 100;
+  else if (mv <= 3300) pct = 0;
+  else                 pct = (uint8_t)((mv - 3300) * 100 / (4150 - 3300));
+  Serial.printf("Battery: %u mV, %u %%\n", (unsigned)mv, (unsigned)pct);
+  return pct;
 #else
   return 100;                               // USB-Versorgung
 #endif
@@ -183,12 +215,79 @@ static void tap(uint8_t bit) {
   sendReport(lastSent & ~bit);
 }
 
+// ---------------- Deep Sleep ----------------
+static void goDeepSleep(const char* why) {
+  Serial.printf("Deep Sleep: %s\n", why);
+  goingToSleep = true;
+
+  if (connected) {
+    if (lastSent) sendReport(0);                // nichts gedrückt hinterlassen
+    server->disconnect(connHandle);
+    for (uint32_t t = millis(); connected && (millis() - t) < 500; ) delay(10);
+  }
+  NimBLEDevice::stopAdvertising();
+
+  // Warten, bis alle Tasten losgelassen sind – sonst sofortiger Wake
+  while (anyButtonHeld()) delay(10);
+  delay(DEBOUNCE_MS * 2);
+
+  // LED: 2x kurz blinken, dann aus
+  for (int i = 0; i < 2; i++) { ledSet(LED_KEY); delay(60); ledSet(LED_OFF); delay(120); }
+#if !defined(BOARD_DEVKIT)
+  pinMode(PIN_LED, INPUT);                     // LED-Pin hochohmig im Schlaf
+#endif
+
+  // EXT1: Wake, sobald eine Taste nach GND gezogen wird.
+  // Pull-ups im RTC-Bereich halten, sonst floaten die Pins (Fehl-Wakeups).
+  uint64_t mask = 0;
+  for (uint8_t p : wakePins) {
+    gpio_num_t g = (gpio_num_t)p;
+    rtc_gpio_init(g);
+    rtc_gpio_set_direction(g, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en(g);
+    rtc_gpio_pulldown_dis(g);
+    rtc_gpio_hold_en(g);
+    mask |= (1ULL << p);
+  }
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
+
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// ---------------- Zustände Loop ----------------
+static uint8_t   pending     = 0;      // gepufferter Seitenwechsel bis Kindle bereit
+static uint8_t   suppress    = 0;      // gehaltene Tasten ignorieren, bis losgelassen
+static bool      wasReady    = false;
+static SideState side        = SIDE_IDLE;
+static uint8_t   sideFirst   = 0;
+static uint32_t  sideStart   = 0;
+static bool      chordFired  = false;
+static uint32_t  powerSentAt = 0;
+static uint32_t  lastBatSent = 0;
+static uint32_t  lastBlink   = 0;
+
 // ---------------- Setup ----------------
 void setup() {
+  setCpuFrequencyMhz(80);
+
+  // Haltefunktion aus dem letzten Deep Sleep aufheben
+  for (uint8_t p : wakePins) {
+    rtc_gpio_hold_dis((gpio_num_t)p);
+    rtc_gpio_deinit((gpio_num_t)p);
+  }
+
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  bool fromSleep = (cause == ESP_SLEEP_WAKEUP_EXT1);
+
   Serial.begin(115200);
-  // Native USB: nach Reset meldet sich der COM-Port neu an, frühe Ausgaben gingen sonst verloren.
-  for (uint32_t t = millis(); !Serial && (millis() - t) < 3000; ) delay(10);
-  delay(200);
+  // Native USB: nur nach Power-on/Reset auf den COM-Port warten.
+  // Nach Deep-Sleep-Wake nicht, sonst kostet jeder Wake im Akkubetrieb 3 s.
+  if (!fromSleep) {
+    for (uint32_t t = millis(); !Serial && (millis() - t) < 3000; ) delay(10);
+    delay(200);
+  }
 
   pinMode(PIN_FWD,   INPUT_PULLUP);
   pinMode(PIN_BACK,  INPUT_PULLUP);
@@ -198,6 +297,16 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
 #endif
   ledSet(LED_OFF);
+
+  // Wecktaste auswerten
+  if (fromSleep) {
+    uint64_t st = esp_sleep_get_ext1_wakeup_status();
+    if      (st & (1ULL << PIN_FWD))   { pending = BIT_FWD;  suppress = BIT_FWD;  }
+    else if (st & (1ULL << PIN_BACK))  { pending = BIT_BACK; suppress = BIT_BACK; }
+    else if (st & (1ULL << PIN_BR_UP)) { suppress = BIT_BR_UP; }
+    else if (st & (1ULL << PIN_BR_DN)) { suppress = BIT_BR_DN; }
+    Serial.printf("Wake EXT1, pending 0x%02X\n", pending);
+  }
 
   NimBLEDevice::init(DEVICE_NAME);
   // Just Works, Bonding, Secure Connections, kein MITM.
@@ -240,20 +349,14 @@ void setup() {
   adv->setMaxInterval(ADV_INTERVAL_UNITS);
   adv->start();                                  // startet auch den GATT-Server
 
+  advStart     = millis();
+  lastActivity = millis();
+
   Serial.printf("KindlePageturner %s advertising, MAC %s\n",
                 FW_VERSION, NimBLEDevice::getAddress().toString().c_str());
 }
 
 // ---------------- Loop ----------------
-static uint8_t  pending     = 0;      // gepufferter Seitenwechsel bis Kindle bereit
-static bool     wasReady    = false;
-static SideState side       = SIDE_IDLE;
-static uint8_t   sideFirst  = 0;
-static uint32_t  sideStart  = 0;
-static bool      chordFired = false;
-static uint32_t lastBatSent = 0;
-static uint32_t lastBlink   = 0;
-
 void loop() {
   uint32_t now = millis();
 
@@ -262,20 +365,37 @@ void loop() {
   updateButton(bUp, now);
   updateButton(bDn, now);
 
+  // Unterdrückung aufheben, sobald die Taste losgelassen ist
+  if ((suppress & BIT_FWD)   && !bFwd.state)  suppress &= ~BIT_FWD;
+  if ((suppress & BIT_BACK)  && !bBack.state) suppress &= ~BIT_BACK;
+  if ((suppress & BIT_BR_UP) && !bUp.state)   suppress &= ~BIT_BR_UP;
+  if ((suppress & BIT_BR_DN) && !bDn.state)   suppress &= ~BIT_BR_DN;
+
   bool ready = connected && (now - connectedAt) >= READY_DELAY_MS;
+
+  // --- Deep-Sleep-Bedingungen ---
+  if (!connected && (now - advStart) >= ADV_TIMEOUT_MS) {
+    goDeepSleep("kein Kindle");
+  }
+  if (connected && (now - lastActivity) >= IDLE_TIMEOUT_MS) {
+    goDeepSleep("keine Taste");
+  }
+  if (powerSentAt && side == SIDE_IDLE && (now - powerSentAt) >= AFTER_POWER_MS) {
+    goDeepSleep("Sleep-Geste");
+  }
 
   // --- LED ---
   if (!connected) {                                   // blinkt beim Advertising
     if (now - lastBlink >= 1000) lastBlink = now;
     ledSet((now - lastBlink) < 80 ? LED_ADV : LED_OFF);
   } else {
-    ledSet(lastSent ? LED_KEY : LED_CONN);
+    ledSet(lastSent ? LED_KEY : LED_OFF);             // verbunden: LED aus (Strom sparen)
   }
 
   // --- nicht bereit: letzten Seitenwechsel puffern ---
   if (!ready) {
-    if (fwdPressed)  pending = BIT_FWD;
-    if (backPressed) pending = BIT_BACK;
+    if (fwdPressed)  { pending = BIT_FWD;  suppress |= BIT_FWD;  }
+    if (backPressed) { pending = BIT_BACK; suppress |= BIT_BACK; }
     wasReady = false;
     delay(5);
     return;
@@ -288,7 +408,8 @@ void loop() {
     lastSent = 0;
     sendReport(0);
     hid->setBatteryLevel(readBatteryPercent(), true);
-    lastBatSent = now;
+    lastBatSent  = now;
+    lastActivity = now;
     if (pending) { tap(pending); pending = 0; }
   }
 
@@ -296,7 +417,8 @@ void loop() {
   // Eine Helligkeitstaste wird erst nach CHORD_WINDOW_MS an den Kindle gemeldet.
   // Kommt in dieser Zeit die zweite Seitentaste dazu, ist es die Sleep-Geste
   // und es wird keine Helligkeit gesendet.
-  bool upHeld = bUp.state, dnHeld = bDn.state;
+  bool upHeld = bUp.state && !(suppress & BIT_BR_UP);
+  bool dnHeld = bDn.state && !(suppress & BIT_BR_DN);
   uint8_t brBits = 0;
 
   switch (side) {
@@ -333,6 +455,7 @@ void loop() {
       if (upHeld && dnHeld && !chordFired && (now - sideStart) >= SLEEP_CHORD_MS) {
         chordFired = true;
         tap(BIT_POWER);
+        powerSentAt = now;
         Serial.println("KEY_POWER");
       }
       if (!upHeld && !dnHeld) side = SIDE_IDLE;   // erst nach Loslassen beider Tasten
@@ -341,8 +464,8 @@ void loop() {
 
   // --- Report zusammenbauen ---
   uint8_t bits = brBits;
-  if (bFwd.state)  bits |= BIT_FWD;
-  if (bBack.state) bits |= BIT_BACK;
+  if (bFwd.state  && !(suppress & BIT_FWD))  bits |= BIT_FWD;
+  if (bBack.state && !(suppress & BIT_BACK)) bits |= BIT_BACK;
   if (bits != lastSent) sendReport(bits);
 
   // --- Akkustand periodisch (Kindle nutzt nur Notifications) ---
