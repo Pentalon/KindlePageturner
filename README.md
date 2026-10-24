@@ -2,53 +2,74 @@
 
 DIY Bluetooth-Pageturner für Kindle-Modelle ab 2024 (Firmware ≥ 5.20.1), kompatibel zur Amazon Kindle Click.
 
-Status: v0.1.4 – Seite vor/zurück, Helligkeit +/−, Sleep-Geste und Akkuanzeige am Kindle (FW 5.20.1) getestet.
+Status: v0.2.0 – Seite vor/zurück, Helligkeit +/−, Sleep-Geste, Akkuanzeige und Deep Sleep am Kindle (FW 5.20.1) getestet.
 
 ## Bedienung
+4 Tasten auf einer Folientastatur (Membrantastatur 1×4):
+
 | Taste | Funktion |
 |---|---|
-| Vorne oben | Seite vor |
-| Vorne unten | Seite zurück |
-| Seite oben (kurz / gehalten) | Helligkeit + |
-| Seite unten (kurz / gehalten) | Helligkeit − |
-| Beide Seitentasten 1 s | Kindle schlafen legen |
+| 1 | Seite vor |
+| 2 | Seite zurück |
+| 3 (kurz / gehalten) | heller |
+| 4 (kurz / gehalten) | dunkler |
+| 3 + 4 gemeinsam 1 s | Kindle schlafen legen |
 
-Der Pageturner kann den Kindle nicht aufwecken (der Kindle schaltet im Ruhezustand Bluetooth ab). Nach dem Aufwecken verbindet er sich in 2–4 s neu.
+- Der Pageturner kann den Kindle nicht aufwecken (der Kindle schaltet im Ruhezustand Bluetooth ab).
+- Nach dem Aufwecken des Kindle: eine Taste drücken. Der Pageturner verbindet sich in 3–5 s neu; ein Druck auf 1 oder 2 wird danach nachgeliefert.
+- Seitenrichtung tauschbar am Kindle unter Einstellungen › Zubehör.
+
+## Deep Sleep
+| Bedingung | Zeit | `#define` |
+|---|---|---|
+| kein Kindle verbunden | 60 s | `ADV_TIMEOUT_MS` |
+| verbunden, keine Taste | 5 min | `IDLE_TIMEOUT_MS` |
+| nach der Sleep-Geste | 1 s nach Loslassen | `AFTER_POWER_MS` |
+
+Jede Taste weckt den Pageturner (EXT1). LED blinkt vor dem Schlafen 2× kurz.
 
 ## Hardware
-Board-Auswahl im Sketch per `#define BOARD_DEVKIT` bzw. `#define BOARD_XIAO`.
+- Seeed XIAO ESP32-S3
+- Folientastatur 1×4, gemeinsame Leitung an GND, Tasten gegen GND (interne Pull-ups)
+- 1-zelliger LiPo an den BAT-Pads, Laden über USB-C
+- Spannungsteiler 2× 220 kΩ von BAT+ auf D9, 100 nF von D9 gegen GND
+- Antenne am U.FL anstecken (auch für Bluetooth nötig; XIAO hat keine Chipantenne)
 
-| Funktion | GPIO | XIAO-Pin |
-|---|---|---|
-| Seite vor | 1 | D0 |
-| Seite zurück | 2 | D1 |
-| Helligkeit + | 5 | D4 |
-| Helligkeit − | 6 | D5 |
-| Akkuspannung (nur XIAO) | 9 | D10 |
-| Status-LED | 48 (RGB, DevKit) | 21 (XIAO, active low) |
+| Funktion | Taste | XIAO-Pin | GPIO |
+|---|---|---|---|
+| Seite vor | 1 | D0 | 1 |
+| Seite zurück | 2 | D1 | 2 |
+| heller | 3 | D4 | 5 |
+| dunkler | 4 | D5 | 6 |
+| Akkuspannung | – | D9 | 8 |
+| Status-LED (onboard, active low) | – | – | 21 |
 
-Taster jeweils gegen GND (interne Pull-ups).
+### LED
+| Zustand | LED |
+|---|---|
+| wartet auf Kindle | blinkt kurz 1×/s |
+| verbunden | aus, leuchtet bei Tastendruck |
+| vor Deep Sleep | 2× kurz |
 
-### Seeed XIAO ESP32-S3 (Zielhardware)
-- externe Antenne am U.FL anstecken
-- 1-zelliger LiPo an den BAT-Pads
-- Spannungsteiler 2× 220 kΩ von BAT+ auf D10, 100 nF gegen GND
+### Akku kalibrieren
+Serial Monitor zeigt `Battery: xxxx mV, yy %`. Mit Multimeter an den BAT-Pads vergleichen (ohne USB, da sonst Ladespannung gemessen wird) und bei Abweichung `BAT_DIVIDER` anpassen: neu = 2,00 × Multimeter ÷ Firmware.
 
-### ESP32-S3-N16R8 DevKit (Entwicklung, Breadboard)
-- Versorgung über USB, keine Akkumessung (meldet 100 %)
+### Entwicklung am DevKit
+ESP32-S3-N16R8 DevKit am Breadboard: `#define BOARD_DEVKIT` statt `BOARD_XIAO`. Gleiche GPIOs (1, 2, 5, 6), keine Akkumessung (meldet 100 %), RGB-LED an GPIO48.
 
 ## Firmware
 - `Firmware/KindlePageturner/KindlePageturner.ino`
 - Arduino IDE 2.x, esp32 Core 3.3.x
 - Library: NimBLE-Arduino 2.5.1 (h2zero)
 
-| Einstellung | DevKit | XIAO |
+| Einstellung | XIAO | DevKit |
 |---|---|---|
-| Board | ESP32S3 Dev Module | XIAO_ESP32S3 |
-| Flash Size | 16MB | 8MB |
-| USB CDC On Boot | Enabled (Port „USB“) | Enabled |
+| Board | XIAO_ESP32S3 | ESP32S3 Dev Module |
+| Flash Size | 8MB | 16MB |
+| USB CDC On Boot | Enabled | Enabled (Port „USB“) |
 
-Nach Änderungen an Report Map oder GATT-Services: am Kindle „Vergessen“ und neu koppeln.
+- Upload klappt nicht: BOOT halten, USB anstecken, BOOT loslassen, hochladen, danach RESET.
+- Nach Änderungen an Report Map oder GATT-Services: am Kindle „Vergessen“ und neu koppeln.
 
 ## Protokoll (Kurzfassung)
 - BLE HOGP, Just Works, Bonding; Pairing startet nur der Kindle
@@ -56,5 +77,6 @@ Nach Änderungen an Report Map oder GATT-Services: am Kindle „Vergessen“ und
 - DIS PnP ID `01 71 01 43 04 00 01`, Firmware Revision `0x2A26`
 - Battery Level `0x2A19` per Notify
 - Report ID 1, eine Application Collection: KEY_PAGEDOWN, KEY_PAGEUP (Keyboard), Brightness +/−, Power (Consumer)
+- Sleep-Geste (KEY_POWER) muss der Pageturner selbst erkennen; der Kindle wertet keine Tastenkombination aus
 
 Referenz: https://github.com/zuyan9/Open-Kindle-Click-nRF52840 (PROTOCOL.md)
