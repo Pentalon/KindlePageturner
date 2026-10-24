@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="990" height="560" viewBox="0 0 990 560" font-family="Arial, Helvetica, sans-serif">
+<rect width="990" height="560" fill="#ffffff"/>
+<g stroke="#1a1a1a" stroke-width="2" fill="none" stroke-linecap="round">
+<rect x="380" y="90" width="200" height="340" rx="8" fill="#eef3f8" stroke="#1a1a1a"/>
+<line x1="110" y1="140" x2="170" y2="140"/>
+<line x1="170" y1="140" x2="200" y2="124"/>
+<line x1="212" y1="140" x2="380" y2="140"/>
+<circle cx="170" cy="140" r="3" fill="#ffffff"/><circle cx="212" cy="140" r="3" fill="#ffffff"/>
+<line x1="110" y1="195" x2="170" y2="195"/>
+<line x1="170" y1="195" x2="200" y2="179"/>
+<line x1="212" y1="195" x2="380" y2="195"/>
+<circle cx="170" cy="195" r="3" fill="#ffffff"/><circle cx="212" cy="195" r="3" fill="#ffffff"/>
+<line x1="110" y1="250" x2="170" y2="250"/>
+<line x1="170" y1="250" x2="200" y2="234"/>
+<line x1="212" y1="250" x2="380" y2="250"/>
+<circle cx="170" cy="250" r="3" fill="#ffffff"/><circle cx="212" cy="250" r="3" fill="#ffffff"/>
+<line x1="110" y1="305" x2="170" y2="305"/>
+<line x1="170" y1="305" x2="200" y2="289"/>
+<line x1="212" y1="305" x2="380" y2="305"/>
+<circle cx="170" cy="305" r="3" fill="#ffffff"/><circle cx="212" cy="305" r="3" fill="#ffffff"/>
+<circle cx="110" cy="195" r="4" fill="#1a1a1a" stroke="none"/>
+<circle cx="110" cy="250" r="4" fill="#1a1a1a" stroke="none"/>
+<circle cx="110" cy="305" r="4" fill="#1a1a1a" stroke="none"/>
+<line x1="110" y1="140" x2="110" y2="490"/>
+<line x1="480" y1="430" x2="480" y2="490"/>
+<line x1="480" y1="90" x2="480" y2="50"/>
+<line x1="480" y1="50" x2="464" y2="30"/>
+<line x1="480" y1="50" x2="496" y2="30"/>
+<line x1="480" y1="50" x2="480" y2="26"/>
+<line x1="580" y1="140" x2="860" y2="140"/>
+<circle cx="700" cy="140" r="4" fill="#1a1a1a" stroke="none"/>
+<rect x="690" y="165" width="20" height="60" fill="#ffffff"/>
+<line x1="700" y1="140" x2="700" y2="165"/>
+<line x1="700" y1="225" x2="700" y2="260"/>
+<line x1="580" y1="260" x2="780" y2="260"/>
+<circle cx="700" cy="260" r="4" fill="#1a1a1a" stroke="none"/>
+<rect x="690" y="300" width="20" height="60" fill="#ffffff"/>
+<line x1="700" y1="260" x2="700" y2="300"/>
+<line x1="700" y1="360" x2="700" y2="490"/>
+<line x1="780" y1="260" x2="780" y2="318"/>
+<line x1="762" y1="318" x2="798" y2="318"/>
+<line x1="762" y1="330" x2="798" y2="330"/>
+<line x1="780" y1="330" x2="780" y2="490"/>
+<line x1="860" y1="140" x2="860" y2="300"/>
+<line x1="838" y1="300" x2="882" y2="300"/>
+<line x1="848" y1="312" x2="872" y2="312"/>
+<line x1="860" y1="312" x2="860" y2="490"/>
+<line x1="110" y1="490" x2="860" y2="490"/>
+<circle cx="480" cy="490" r="4" fill="#1a1a1a" stroke="none"/>
+<circle cx="700" cy="490" r="4" fill="#1a1a1a" stroke="none"/>
+<circle cx="780" cy="490" r="4" fill="#1a1a1a" stroke="none"/>
+<line x1="480" y1="490" x2="480" y2="504"/>
+<line x1="462" y1="504" x2="498" y2="504"/>
+<line x1="469" y1="511" x2="491" y2="511"/>
+<line x1="475" y1="518" x2="485" y2="518"/>
+</g>
+<rect x="92" y="98" width="252" height="232" rx="6" fill="none" stroke="#2f6fb5" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="218" y="92" font-size="14" text-anchor="middle" font-weight="bold" fill="#2f6fb5">Folientastatur 1×4</text>
+<text x="191" y="118" font-size="13" text-anchor="middle" font-weight="normal" fill="#1a1a1a">1 – Seite vor</text>
+<text x="390" y="145" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">D0 (GPIO1)</text>
+<text x="191" y="173" font-size="13" text-anchor="middle" font-weight="normal" fill="#1a1a1a">2 – Seite zurück</text>
+<text x="390" y="200" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">D1 (GPIO2)</text>
+<text x="191" y="228" font-size="13" text-anchor="middle" font-weight="normal" fill="#1a1a1a">3 – heller</text>
+<text x="390" y="255" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">D4 (GPIO5)</text>
+<text x="191" y="283" font-size="13" text-anchor="middle" font-weight="normal" fill="#1a1a1a">4 – dunkler</text>
+<text x="390" y="310" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">D5 (GPIO6)</text>
+<text x="480" y="330" font-size="16" text-anchor="middle" font-weight="bold" fill="#1a1a1a">Seeed XIAO</text>
+<text x="480" y="350" font-size="16" text-anchor="middle" font-weight="bold" fill="#1a1a1a">ESP32-S3</text>
+<text x="570" y="145" font-size="13" text-anchor="end" font-weight="normal" fill="#1a1a1a">BAT+</text>
+<text x="570" y="265" font-size="13" text-anchor="end" font-weight="normal" fill="#1a1a1a">D9 (GPIO8)</text>
+<text x="480" y="422" font-size="13" text-anchor="middle" font-weight="normal" fill="#1a1a1a">GND</text>
+<text x="480" y="385" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">USB-C</text>
+<text x="480" y="401" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">Laden / Flashen</text>
+<text x="504" y="40" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">U.FL – FPC-Antenne</text>
+<text x="718" y="190" font-size="14" text-anchor="start" font-weight="bold" fill="#1a1a1a">R1</text>
+<text x="718" y="208" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">220 kΩ</text>
+<text x="718" y="325" font-size="14" text-anchor="start" font-weight="bold" fill="#1a1a1a">R2</text>
+<text x="718" y="343" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">220 kΩ</text>
+<text x="806" y="320" font-size="14" text-anchor="start" font-weight="bold" fill="#1a1a1a">C1</text>
+<text x="806" y="338" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">100 nF</text>
+<text x="892" y="296" font-size="16" text-anchor="middle" font-weight="bold" fill="#1a1a1a">+</text>
+<text x="876" y="350" font-size="13" text-anchor="start" font-weight="bold" fill="#1a1a1a">LiPo 1S</text>
+<text x="876" y="368" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">3,7 V</text>
+<text x="876" y="386" font-size="13" text-anchor="start" font-weight="normal" fill="#1a1a1a">300 mAh</text>
+<text x="700" y="120" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">Pads Rückseite</text>
+<text x="110" y="530" font-size="12" text-anchor="start" font-weight="normal" fill="#555">Gemeinsame Leitung der Tastatur an GND · Pull-ups intern (INPUT_PULLUP) · BAT− = GND</text>
+<text x="110" y="548" font-size="12" text-anchor="start" font-weight="normal" fill="#555">Spannungsteiler 1:2 → D9 misst 1,5–2,1 V (Akku 3,0–4,2 V), Faktor BAT_DIVIDER in der Firmware</text>
+<text x="20" y="26" font-size="16" text-anchor="start" font-weight="bold" fill="#1a1a1a">KindlePageturner – Schaltplan</text>
+</svg>
