@@ -29,6 +29,10 @@ Status: v0.2.0 – Seite vor/zurück, Helligkeit +/−, Sleep-Geste, Akkuanzeige
 Jede Taste weckt den Pageturner (EXT1). LED blinkt vor dem Schlafen 2× kurz.
 
 ## Hardware
+Vollständige Teileliste: [PARTS.md](PARTS.md)
+
+![Schaltplan](docs/schematic.svg)
+
 - Seeed XIAO ESP32-S3
 - Folientastatur 1×4, gemeinsame Leitung an GND, Tasten gegen GND (interne Pull-ups)
 - 1-zelliger LiPo an den BAT-Pads, Laden über USB-C
@@ -80,3 +84,10 @@ ESP32-S3-N16R8 DevKit am Breadboard: `#define BOARD_DEVKIT` statt `BOARD_XIAO`. 
 - Sleep-Geste (KEY_POWER) muss der Pageturner selbst erkennen; der Kindle wertet keine Tastenkombination aus
 
 Referenz: https://github.com/zuyan9/Open-Kindle-Click-nRF52840 (PROTOCOL.md)
+
+## Lizenz
+MIT – siehe [LICENSE](LICENSE).
+
+## Hinweis
+Nicht mit Amazon verbunden. Kindle ist eine Marke von Amazon.com, Inc. oder verbundenen Unternehmen.
+Not affiliated with Amazon. Kindle is a trademark of Amazon.com, Inc. or its affiliates.
